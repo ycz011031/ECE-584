@@ -125,7 +125,7 @@ def main():
 
     # Do not change
     # Defines init as prestate that is legal
-    init = And(legal_config(prestate), bounds(prestate))
+    init = legal_config(prestate)
 
     # 3. Write the base_case predicate using the Implies() function of z3
     base_case = Implies(init, invariant(prestate))  # TODO
