@@ -9,8 +9,11 @@ class TimingGraph:
     def __init__(self):
         self.graph = nx.DiGraph()
 
-    def add_path(self, src, dst, mean_delay, stddev_delay):
-        self.graph.add_edge(src, dst, delay_dist=(mean_delay, stddev_delay))
+    def add_path(self, src, dst, gate_delays):
+        """
+        gate_delays: list of (mean, stddev) tuples for each gate on the edge
+        """
+        self.graph.add_edge(src, dst, gate_delays=gate_delays)
 
     def simulate(self, clock_period, num_trials=10000):
         violations = defaultdict(int)
@@ -20,9 +23,12 @@ class TimingGraph:
             sampled_delays = {}
 
             for u, v in self.graph.edges:
-                mu, sigma = self.graph[u][v]['delay_dist']
-                delay_sample = np.random.normal(mu, sigma)
-                sampled_delays[(u, v)] = max(delay_sample, 0)
+                gate_delays = self.graph[u][v]['gate_delays']
+                total_delay = 0
+                for mu, sigma in gate_delays:
+                    gate_sample = np.random.normal(mu, sigma)
+                    total_delay += max(gate_sample, 0)
+                sampled_delays[(u, v)] = total_delay
 
             for node in nx.topological_sort(self.graph):
                 arrival_time = 0
@@ -54,9 +60,9 @@ class TimingGraph:
 if __name__ == "__main__":
     tg = TimingGraph()
 
-    # Example pipeline: A -> B -> C
-    tg.add_path("RegA", "RegB", mean_delay=2.0, stddev_delay=0.3)
-    tg.add_path("RegB", "RegC", mean_delay=1.5, stddev_delay=0.2)
+    # Example pipeline: A -> B -> C with multiple gates per path
+    tg.add_path("RegA", "RegB", gate_delays=[(1.0, 0.2), (1.0, 0.1)])  # total ~2.0 ± combined
+    tg.add_path("RegB", "RegC", gate_delays=[(0.8, 0.1), (0.7, 0.1)])  # total ~1.5
 
     clock_period = 3.0
     violations, histograms = tg.simulate(clock_period=clock_period, num_trials=10000)
