@@ -4,6 +4,7 @@ import networkx as nx
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import defaultdict
+import random
 
 class TimingGraph:
     def __init__(self):
@@ -11,9 +12,23 @@ class TimingGraph:
 
     def add_path(self, src, dst, gate_delays):
         """
-        gate_delays: list of (mean, stddev) tuples for each gate on the edge
+        gate_delays: list of either
+            - (mean, stddev) tuple
+            - list of delay samples (floats)
+            - function that returns a sampled delay value
         """
         self.graph.add_edge(src, dst, gate_delays=gate_delays)
+
+    def sample_delay(self, gate):
+        if isinstance(gate, tuple) and len(gate) == 2:
+            mu, sigma = gate
+            return max(np.random.normal(mu, sigma), 0)
+        elif isinstance(gate, list):
+            return random.choice(gate)
+        elif callable(gate):
+            return max(gate(), 0)
+        else:
+            raise ValueError("Unsupported gate delay format")
 
     def simulate(self, clock_period, num_trials=10000):
         violations = defaultdict(int)
@@ -24,10 +39,7 @@ class TimingGraph:
 
             for u, v in self.graph.edges:
                 gate_delays = self.graph[u][v]['gate_delays']
-                total_delay = 0
-                for mu, sigma in gate_delays:
-                    gate_sample = np.random.normal(mu, sigma)
-                    total_delay += max(gate_sample, 0)
+                total_delay = sum(self.sample_delay(gate) for gate in gate_delays)
                 sampled_delays[(u, v)] = total_delay
 
             for node in nx.topological_sort(self.graph):
@@ -60,9 +72,12 @@ class TimingGraph:
 if __name__ == "__main__":
     tg = TimingGraph()
 
-    # Example pipeline: A -> B -> C with multiple gates per path
-    tg.add_path("RegA", "RegB", gate_delays=[(1.0, 0.2), (1.0, 0.1)])  # total ~2.0 ± combined
-    tg.add_path("RegB", "RegC", gate_delays=[(0.8, 0.1), (0.7, 0.1)])  # total ~1.5
+    # Example: use Gaussian, sample list, and a custom function
+    delay_samples = [1.9, 2.1, 2.0, 2.2, 1.8]
+    custom_pdf = lambda: np.random.exponential(scale=1.5)
+
+    tg.add_path("RegA", "RegB", gate_delays=[(1.0, 0.2), delay_samples])
+    tg.add_path("RegB", "RegC", gate_delays=[custom_pdf])
 
     clock_period = 3.0
     violations, histograms = tg.simulate(clock_period=clock_period, num_trials=10000)
