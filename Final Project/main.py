@@ -1,4 +1,7 @@
 # statistical_timing_verification.py
+#TODO add option to display highest allowed frequency for given tolerance
+#verify zero tolerance
+
 
 import networkx as nx
 import numpy as np
