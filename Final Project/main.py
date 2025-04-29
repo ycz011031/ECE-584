@@ -110,6 +110,72 @@ class TimingGraph:
             plt.grid(True)
             plt.show()
 
+class MonteCarloTimingGraph:
+    def __init__(self):
+        self.graph = nx.DiGraph()
+
+    def add_path(self, start_node, end_node, delays):
+        """
+        Add a path from start_node to end_node with a list of possible delays (samples).
+        delays: list of floats
+        """
+        self.graph.add_edge(start_node, end_node, delays=delays)
+
+    def load_from_file(self, filename):
+        """
+        Load graph from a text file.
+        Each line should be: start_node end_node delay1 delay2 delay3 ...
+        """
+        with open(filename, 'r') as f:
+            for line in f:
+                parts = line.strip().split()
+                start_node, end_node = parts[0], parts[1]
+                delays = list(map(float, parts[2:]))
+                self.add_path(start_node, end_node, delays)
+
+    def find_critical_path(self):
+        """
+        Find a critical path (longest expected delay using mean delay values).
+        Returns: list of nodes (path)
+        """
+        # Use average delay for each edge
+        for u, v, data in self.graph.edges(data=True):
+            data['mean_delay'] = np.mean(data['delays'])
+        
+        # Find longest path weighted by mean delay
+        path = nx.dag_longest_path(self.graph, weight='mean_delay')
+        return path
+
+    def calculate_total_delay(self, path, num_trials=10000):
+        """
+        For each trial, randomly pick one delay per edge in the path and sum.
+        Returns: total_delays array (shape = num_trials)
+        """
+        total_delays = np.zeros(num_trials)
+
+        for i in range(len(path) - 1):
+            u, v = path[i], path[i+1]
+            delays = self.graph.edges[u, v]['delays']
+            samples = np.random.choice(delays, size=num_trials)
+            total_delays += samples
+        
+        return total_delays
+
+    def find_maximum_frequency(self, num_trials=10000):
+        """
+        Run full Monte Carlo to find the critical path delay distribution.
+        Returns (mean, std, max_frequency)
+        """
+        path = self.find_critical_path()
+        total_delays = self.calculate_total_delay(path, num_trials=num_trials)
+        
+        mean = np.mean(total_delays)
+        std = np.std(total_delays)
+
+        max_delay = np.percentile(total_delays, 99.7)  # 3-sigma worst case
+        max_freq = 1.0 / max_delay if max_delay > 0 else 0.0  # GHz if delay in ns
+
+        return mean, std, max_freq
 
 class GaussianTimingGraph:
     def __init__(self):
@@ -180,43 +246,58 @@ class GaussianTimingGraph:
         # Step 4: Frequency = 1 / period
         return 1.0 / critical_period  # in GHz
 
-
 def read_samples(filename):
-    return np.loadtxt(filename).tolist()
+    """
+    Read a file where each line has two columns separated by tab.
+    We use the second column (delay value).
+    """
+    samples = []
+    with open(filename, 'r') as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) >= 2:
+                samples.append(float(parts[1]))  # Use the second column
+    return samples
 
 def compute_mean_std(samples):
-    return np.mean(samples), np.std(samples)
+    """
+    Given a list of samples, return mean and std deviation.
+    """
+    mean = np.mean(samples)
+    std = np.std(samples)
+    return mean, std
 
-def plot_monte_carlo_pdf(delays):
-    plt.figure(figsize=(8,5))
-    plt.hist(delays, bins=100, density=True, alpha=0.7, label="Monte Carlo", color='blue')
-    plt.title("Monte Carlo Total Delay PDF")
-    plt.xlabel("Delay (ns)")
-    plt.ylabel("Probability Density")
+
+def plot_monte_carlo_pdf(mc_total_delays):
+    """
+    Plot the normalized histogram (PDF) of Monte Carlo total delays.
+    """
+    plt.figure()
+    plt.hist(mc_total_delays, bins=50, density=True, alpha=0.6, color='skyblue', edgecolor='black')
+    plt.xlabel('Total Delay (s)')
+    plt.ylabel('Probability Density')
+    plt.title('Monte Carlo Delay Distribution')
     plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
     plt.show()
-    return
 
-def plot_overlay(monte_carlo_delays, gaussian_mean, gaussian_std):
-    x = np.linspace(min(monte_carlo_delays) - 1, max(monte_carlo_delays) + 1, 1000)
-    mc_hist, mc_bins = np.histogram(monte_carlo_delays, bins=100, density=True)
-    mc_bin_centers = 0.5 * (mc_bins[1:] + mc_bins[:-1])
+def plot_overlay(mc_total_delays, total_mean, total_std):
+    """
+    Plot Monte Carlo histogram + Gaussian overlay
+    """
+    plt.figure()
+    count, bins, ignored = plt.hist(mc_total_delays, bins=100, density=True, alpha=0.7, label="Monte Carlo")
+    
+    # Plot Gaussian
+    gaussian_pdf = (1 / (total_std * np.sqrt(2 * np.pi))) * \
+                   np.exp(- (bins - total_mean)**2 / (2 * total_std**2))
+    plt.plot(bins, gaussian_pdf, linewidth=2, label="Gaussian")
 
-    plt.figure(figsize=(8,5))
-    plt.plot(mc_bin_centers, mc_hist, label="Monte Carlo", color='blue')
-    plt.plot(x, (1 / (gaussian_std * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - gaussian_mean) / gaussian_std)**2),
-             label=f"Gaussian N({gaussian_mean:.2f}, {gaussian_std:.2f}²)", color='red', linestyle='--')
-    plt.title("Monte Carlo vs Gaussian PDF")
-    plt.xlabel("Delay (ns)")
+    plt.xlabel("Total Delay (ns)")
     plt.ylabel("Probability Density")
-    plt.grid(True)
+    plt.title("Delay Distribution Comparison")
     plt.legend()
-    plt.tight_layout()
+    plt.grid(True)
     plt.show()
-    return
-
 
 def gaussian_test():
     # 1. Define the paths with Gaussian delays (mean, stddev) for XOR, AND, OR gates
@@ -260,38 +341,32 @@ def gaussian_test():
     print(f"Gaussian Runtime: {gaussian_runtime:.6f} seconds")
 
 if __name__ == "__main__":
+    gaussian_test()
 
-    gaussian_test()  
     # 1. Read the Monte Carlo data
-    xor_samples = read_samples("and.txt")
+    xor_samples = read_samples("xor.txt")
     and_samples = read_samples("and.txt")
-    or_samples = read_samples("and.txt")
+    or_samples = read_samples("or.txt")
 
     ###### --- Monte Carlo-based --- ######
     print("\n--- Monte Carlo TimingGraph ---")
-    tg = TimingGraph()
-    tg.add_path("xor", "and", gate_delays=xor_samples)
-    tg.add_path("and", "or", gate_delays=and_samples)
-    tg.add_path("or", "out", gate_delays=or_samples)  # dummy output node
+    tg = MonteCarloTimingGraph()
+    tg.add_path("xor", "and", xor_samples)
+    tg.add_path("and", "or", and_samples)
+    tg.add_path("or", "out", or_samples)  # dummy output node
 
     start_mc = time.time()
-    violations, histograms = tg.simulate(clock_period=10.0, num_trials=1000)
+    mean_mc, std_mc, max_freq_mc = tg.find_maximum_frequency(num_trials=10000)
     mc_runtime = time.time() - start_mc
 
-    # Total delay is from "xor" to "out"
-    mc_total_delays = []
-    for i in range(len(histograms[("xor", "and")])):
-        total = (
-            histograms[("xor", "and")][i]
-            + histograms[("and", "or")][i]
-            + histograms[("or", "out")][i]
-        )
-        mc_total_delays.append(total)
+    # Get all total delays for plotting
+    critical_path = tg.find_critical_path()
+    mc_total_delays = tg.calculate_total_delay(critical_path, num_trials=10000)
 
     plot_monte_carlo_pdf(mc_total_delays)
-    print ("debug")
 
-    max_freq_mc = tg.find_max_frequency(max_failure_rate=0.01, num_trials=1000)
+    print(f"Monte Carlo Mean Delay: {mean_mc:.3f} ns")
+    print(f"Monte Carlo Std Delay: {std_mc:.3f} ns")
     print(f"Monte Carlo Max Frequency: {max_freq_mc:.3f} GHz")
     print(f"Monte Carlo Runtime: {mc_runtime:.3f} seconds")
 
